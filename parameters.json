@@ -1,0 +1,22 @@
+[
+  {
+    "ParameterKey": "KeyName",
+    "ParameterValue": "openbsd"
+  },
+  {
+    "ParameterKey": "InstanceType",
+    "ParameterValue": "t2.micro"
+  },
+  {
+    "ParameterKey": "HostedZoneName",
+    "ParameterValue": "my-aws-cloud.com."
+  },
+  {
+    "ParameterKey": "Hostname",
+    "ParameterValue": "openbsd"
+  },
+  {
+    "ParameterKey": "AdminSecurityGroup",
+    "ParameterValue": "sg-60cc3418"
+  }
+]
