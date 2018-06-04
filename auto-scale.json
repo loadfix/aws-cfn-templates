@@ -1,14 +1,19 @@
 {
         "Parameters": {
-            "PublicSubnet3": {
+            "PublicSubnet1": {
                 "Type": "String",
-                "Description": "Private Subnet ID in AZ C ",
-                "Default": "subnet-ef5662a6"
+                "Description": "Public Subnet ID in AZ A ",
+                "Default": "subnet-79d6b022"
             },
             "PublicSubnet2": {
                 "Type": "String",
                 "Description": "Public Subnet ID in AZ B ",
                 "Default": "subnet-34cfcb1c"
+            },
+            "PublicSubnet3": {
+                "Type": "String",
+                "Description": "Private Subnet ID in AZ C ",
+                "Default": "subnet-ef5662a6"
             },
             "VPC": {
                 "Type": "String",
@@ -27,16 +32,11 @@
             "MaxSize": {
                 "Type": "Number",
                 "Description": "Maximum number of EC2 instances.",
-                "Default": "6"
+                "Default": "3"
             },
             "ApplicationName": {
                 "Type": "String",
                 "Default": "web"
-            },
-            "PublicSubnet1": {
-                "Type": "String",
-                "Description": "Public Subnet ID in AZ A ",
-                "Default": "subnet-79d6b022"
             },
             "AutoScaleInstanceType": {
                 "Type": "String",
@@ -304,23 +304,13 @@
             "AutoScalingGroup": {
                 "Type": "AWS::AutoScaling::AutoScalingGroup",
                 "Properties": {
-                    "AvailabilityZones": {
-                        "Fn::GetAZs": ""
-                    },
+                    "AvailabilityZones": { "Fn::GetAZs": "" },
                     "VPCZoneIdentifier": [
-                        {
-                            "Ref": "PublicSubnet1"
-                        },
-                        {
-                            "Ref": "PublicSubnet2"
-                        },
-                        {
-                            "Ref": "PublicSubnet3"
-                        }
+                        { "Ref": "PublicSubnet1" },
+                        { "Ref": "PublicSubnet2" },
+                        { "Ref": "PublicSubnet3" }
                     ],
-                    "MaxSize": {
-                        "Ref": "MaxSize"
-                    },
+                    "MaxSize": { "Ref": "MaxSize" },
                     "Tags": [
                         {
                             "PropagateAtLaunch": true,
@@ -331,19 +321,15 @@
                         }
                     ],
                     "Cooldown": "300",
-                    "HealthCheckType": "EC2",
+                    "HealthCheckType": "ELB",
                     "LaunchConfigurationName": {
                         "Ref": "LaunchConfig"
                     },
                     "MinSize": {
                         "Ref": "MinSize"
                     },
-                    "LoadBalancerNames": [
-                        {
-                            "Ref": "ELB"
-                        }
-                    ],
-                    "HealthCheckGracePeriod": "3600"
+                    "HealthCheckGracePeriod": "3600",
+                    "TargetGroupARNs": [ { "Ref": "DefaultTargetGroup" } ]
                 }
             },
             "WaitCondition": {
@@ -372,33 +358,23 @@
                 "Properties": {
                     "Scheme": { "Ref": "LoadBalancerScheme" },
                     "SecurityGroups": [
-                        {
-                            "Ref": "LoadBalancerSecurityGroup"
-                        }
+                        { "Ref": "LoadBalancerSecurityGroup" }
                     ],
                     "Subnets": [
-                        {
-                            "Ref": "PublicSubnet1"
-                        },
-                        {
-                            "Ref": "PublicSubnet2"
-                        },
-                        {
-                            "Ref": "PublicSubnet3"
-                        }
+                        { "Ref": "PublicSubnet1" }, 
+                        { "Ref": "PublicSubnet2" },
+                        { "Ref": "PublicSubnet3" }
                     ]
                 }
             },
             "HttpListener": {
                 "Type": "AWS::ElasticLoadBalancingV2::Listener",
                 "Properties": {
-                    "DefaultActions": [
-                        "TargetGroupArn": { 
-                            "!Ref": "DefaultTargetGroup"
-                        },
-                        "Type": "forward"
-                    ], 
-                    "LoadBalancerArn": { "!Ref": "ELB" },
+                    "DefaultActions": [{
+                        "Type": "forward",
+                        "TargetGroupArn": { "Ref": "DefaultTargetGroup" }
+                    }],
+                    "LoadBalancerArn": { "Ref": "ELB" },
                     "Port": "80",
                     "Protocol": "HTTP"
                 }
