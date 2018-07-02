@@ -1,0 +1,38 @@
+[
+  {
+    "ParameterKey": "EnvironmentName",
+    "ParameterValue": "assignment1"
+  }, 
+  {
+    "ParameterKey": "VPCCIDR",
+    "ParameterValue": "10.0.0.0/16"
+  },
+  {
+    "ParameterKey": "VPCCIDR",
+    "ParameterValue": "10.0.0.0/16"
+  },
+  {
+    "ParameterKey": "PublicSubnetCIDR",
+    "ParameterValue": "10.0.10.0/24"
+  },
+  {
+    "ParameterKey": "AvailabilityZone",
+    "ParameterValue": "ap-southeast-1a"
+  },
+  {
+    "ParameterKey": "KeyName",
+    "ParameterValue": "my_secret_key"
+  },
+  {
+    "ParameterKey": "AMIImageId",
+    "ParameterValue": "ami-de90a5a2"
+  },
+  {
+    "ParameterKey": "DomainDNSName",
+    "ParameterValue": "my-aws-cloud.com"
+  },
+  {
+    "ParameterKey": "AdminHostCIDR",
+    "ParameterValue": "138.19.119.44/32"
+  }
+]

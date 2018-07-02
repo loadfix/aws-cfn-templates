@@ -1,0 +1,577 @@
+Description:
+  Author - ben@cloudwatch.info
+  
+  This template deploys a VPC, with a single public subnet in a single Availability Zone. 
+  It deploys an Internet Gateway, with a default route on the public subnet and a classic load balancer
+  with a single EC2 instance hosting a nginx web server. Static content is hosted out of a S3 bucket 
+  and cloudfront is configured to cache the static content with Route 53 friendly names.
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+  
+  VPCCIDR:
+    Description: The IP range (CIDR notation) for this VPC
+    Type: String
+  
+  PublicSubnetCIDR:
+    Description: The IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+  
+  AvailabilityZone:
+    Description: The Availability Zone for this project
+    Type: String
+  
+  InstanceType:
+    Description: WebServer EC2 instance type
+    Type: String
+    Default: t1.micro
+    ConstraintDescription: must be a valid EC2 instance type.
+  
+  KeyName:
+    Type: String
+    Description: The EC2 Key Pair to allow SSH to the instances.
+  
+  AMIImageId:
+    Description: The AMI Image ID
+    Type: String
+  
+  LoadBalancerScheme:
+    Description: Indicates whether the load balancer in front of the EC2 service is internet-facing or internal.
+    Type: String
+    Default: internet-facing
+  
+  DomainDNSName:
+    Description: Route 53 hosted DNS Domain Name to access AWS resources
+    Type: String
+  
+  AdminHostCIDR:
+    Description: CIDR of hosts who are allowed SSH access
+    Type: String
+
+  CloudFrontHostName:
+    Description: Friendly hostname for Cloudfront served content
+    Type: String
+    Default: cdn
+  
+  WebServerHostName:
+    Description: Friendly hostname for the web server
+    Type: String
+    Default: webserver
+
+  LoadBalancerHostName:
+    Description: Friendly hostname for the load balancer
+    Type: String
+    Default: www
+
+  S3BucketHostname:
+    Description: Friendly name for the S3 bucket
+    Type: String
+    Default: static-content
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+  
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: !Ref PublicSubnetCIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+  WebAccessSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: webserver-sg
+      GroupDescription: "Security group with port TCP/80 open to the Internet"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - FromPort: '80'
+          IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+          ToPort: '80'
+
+  AdminAccessSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: admin-sg
+      GroupDescription: "Security group allowing SSH accecss for administrative purposes"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - FromPort: '22'
+          IpProtocol: tcp
+          CidrIp: !Ref AdminHostCIDR
+          ToPort: '22'
+
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          setup:
+            - InstallCloudwatchLogs
+            - ConfigureDisk
+            - UpgradePackages
+            - InstallNginx
+          updateonly:
+            - InstallCloudwatchLogs
+            - InstallNginx
+        InstallCloudwatchLogs:
+          packages:
+            yum:
+              awslogs: []
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content: !Sub |
+                [main]
+                stack = ${AWS::StackId}
+                region = ${AWS::Region}
+                interval = 5
+                verbose = true
+              mode: "000444"
+              owner: "root"
+              group: "root"
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers = post.update
+                path = Resources.EC2Instance.Metadata.AWS::CloudFormation::Init
+                action = /opt/aws/bin/cfn-init --verbose --stack ${AWS::StackName} --resource EC2Instance --region ${AWS::Region} --configsets updateonly
+                runas = root
+              mode: "000444"
+              owner: "root"
+              group: "root"
+            /etc/awslogs/config/assignment1.conf:
+              content: !Sub |
+                [/var/log/cloud-init.log]
+                file = /var/log/cloud-init.log
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/cloud-init
+
+                [/var/log/cloud-init-output.log]
+                file = /var/log/cloud-init-output.log
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/cloud-init-output
+
+                [/var/log/cfn-init.log]
+                file = /var/log/cfn-init.log
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/cfn-init
+
+                [/var/log/cfn-hup.log]
+                file = /var/log/cfn-hup.log
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/cfn-hup
+
+                [/var/log/cfn-wire.log]
+                file = /var/log/cfn-wire.log
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/cfn-wire
+
+                [/var/log/nginx]
+                file = /var/log/nginx/*
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/nginx
+                datetime_format = %d/%b/%Y:%H:%M:%S %z
+
+                [/var/log/dmesg]
+                file = /var/log/dmesg
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/dmesg
+
+                [/var/log/secure]
+                file = /var/log/secure
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/secure
+              mode: "000444"
+              owner: root
+              group: root
+            /etc/awslogs/awscli.conf:
+              content: !Sub |
+                [plugins]
+                cwlogs = cwlogs
+
+                [default]
+                region = ${AWS::Region}
+              mode: "000444"
+              owner: "root"
+              group: "root"
+          commands:
+            1_set_timezone:
+              command: ln -sf /usr/share/zoneinfo/Asia/Singapore /etc/localtime
+            2_create_state_direcroty: 
+              command: mkdir -p /var/awslogs/state
+          services:
+            sysvinit:
+              awslogs:
+                enabled: true
+                ensureRunning: true
+              cfn-hup:
+                enabled: true
+                ensureRunning: true
+        UpgradePackages:
+          commands:
+            1_yum_update:
+              command: yum -y upgrade
+        ConfigureDisk:
+          files:
+            /tmp/create_partition:
+              content: !Sub |
+                #!/usr/bin/env bash
+                if mount | grep /dev/mapper/vg0-nginx > /dev/null; then            
+                  # Already mounted - Do nothing
+                  echo "Nginx parition already mounted, exiting...."
+                  exit 0
+                else
+                  # Mount not found
+                  echo "Creating Nginx partition on /dev/xvdb..."
+                  pvcreate /dev/xvdb
+                  vgcreate vg0 /dev/xvdb
+                  lvcreate -l 100%FREE -n nginx vg0
+                  mkfs.ext4 /dev/vg0/nginx
+                  echo "/dev/mapper/vg0-nginx /srv ext4 defaults 0 2" >> /etc/fstab
+                  mount -a
+                fi
+              mode: "000700"
+              owner: root
+              group: root
+          commands:
+            1_create_partition: 
+              command: /tmp/create_partition
+        InstallNginx:
+          packages:
+            yum:
+              nginx: []
+          files: 
+            /srv/index.html: 
+              content: !Sub | 
+                <!DOCTYPE html>
+                <html lang="en">
+                <head>
+                <meta charset="UTF-8">
+                <title>Hello AWS World</title>
+                </head>
+                <body>
+                <p><h1>Hello AWS World</h1></p>
+                <p>screen-shot1.png<br><img src="http://${CloudFrontHostName}.${EnvironmentName}.${DomainDNSName}/screen-shot1.png" alt="Screenshot #1" /></p>
+                <p>screen-shot2.png<br><img src="http://${CloudFrontHostName}.${EnvironmentName}.${DomainDNSName}/screen-shot2.png" alt="Screenshot #2" /></p>
+                <p>screen-shot3.png<br><img src="http://${CloudFrontHostName}.${EnvironmentName}.${DomainDNSName}/screen-shot3.png" alt="Screenshot #3" /></p>
+                <p>This environment was created by Cloudformation template: <a href="http://${CloudFrontHostName}.${EnvironmentName}.${DomainDNSName}/assignment1.txt">assignment1.yml</a></p>
+                </body>
+                </html>
+              mode: "000644"
+              owner: "root"
+              group: "root"
+            /etc/nginx/conf.d/assignment1.conf:
+              content: !Sub | 
+                server {
+                  listen       80;
+                  server_name  *.${EnvironmentName}.${DomainDNSName} *.compute.amazonaws.com;
+
+                  location / {
+                  root   /srv;
+                  index  index.html;
+                  }
+                }
+              mode: "000644"
+              owner: "root"
+              group: "root"
+          services:
+            sysvinit:
+              nginx:
+                enabled: true
+                ensureRunning: true
+    Properties: 
+      AvailabilityZone: !Ref AvailabilityZone
+      ImageId: !Ref AMIImageId
+      KeyName: !Ref KeyName
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref WebAccessSecurityGroup
+        - !Ref AdminAccessSecurityGroup
+      IamInstanceProfile: !Ref CloudwatchInstanceProfile
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvdb
+          Ebs:
+            DeleteOnTermination: true
+            VolumeSize: 1
+      UserData:
+        Fn::Base64: !Sub |
+          #!/usr/bin/env bash
+          set -o errexit
+          yum -y update aws-cfn-bootstrap
+          
+          # Helper function in case of error
+          function error_exit {
+            /opt/aws/bin/cfn-signal --exit-code=1 --reason="$1" "${WaitHandle}"
+            exit 1
+          }
+
+          # Configure the new server for nginx
+          /opt/aws/bin/cfn-init --verbose --stack ${AWS::StackName} --resource EC2Instance --region ${AWS::Region} --configsets setup || error_exit 'Error running cfn-init'
+          
+          # Signal the WaitHandler that we have completed server configuration
+          /opt/aws/bin/cfn-signal --exit-code $? --reason='Server configuration complete' "${WaitHandle}"
+
+  WaitHandle:
+    Type: AWS::CloudFormation::WaitConditionHandle
+
+  WaitCondition:
+    Type: AWS::CloudFormation::WaitCondition
+    DependsOn: EC2Instance
+    Properties:
+      Handle: !Ref WaitHandle
+      Timeout: 600
+  
+  CloudFormationLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 14
+  
+  CloudwatchInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref CloudwatchRole
+
+  CloudwatchRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - 'ec2.amazonaws.com'
+          Action: 'sts:AssumeRole'
+      Policies:
+      - PolicyName: 'cloudwatch-policy'
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+              - 'ec2:DescribeTags'
+              - 'cloudwatch:PutMetricData'
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+              - 'logs:DescribeLogGroups'
+              - 'logs:DescribeLogStreams'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - ssm:GetParameter
+            Resource: 'arn:aws:ssm:*:*:parameter/AmazonCloudWatch-*'
+  
+  LoadBalancer:
+    Type: 'AWS::ElasticLoadBalancing::LoadBalancer'
+    Properties:
+      Scheme: !Ref LoadBalancerScheme
+      Listeners:
+        - InstancePort: 80
+          InstanceProtocol: HTTP
+          LoadBalancerPort: 80
+          Protocol: HTTP
+      Subnets:
+        - !Ref PublicSubnet
+      SecurityGroups:
+        - !Ref WebAccessSecurityGroup
+      Instances:
+        - !Ref EC2Instance
+      HealthCheck:
+        HealthyThreshold: 2
+        Target: HTTP:80/
+        UnhealthyThreshold: 10
+        Timeout: 10
+        Interval: 60
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+  S3Bucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Join [ '', [ !Ref S3BucketHostname, '.', !Ref EnvironmentName, '.', !Ref DomainDNSName ]]
+      AccessControl: PublicRead
+      VersioningConfiguration: 
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+  S3BucketPolicy: 
+    Type: "AWS::S3::BucketPolicy"
+    Properties: 
+      Bucket: !Ref S3Bucket
+      PolicyDocument: 
+        Version: '2012-10-17'
+        Statement: 
+          - Sid: ReadAccess
+            Action: 
+              - "s3:GetObject"
+            Effect: "Allow"
+            Resource: !Join ['', [ !GetAtt [ S3Bucket, Arn ], '/*' ]]
+            Principal: "*"
+
+  LoadBalancerDNSName:
+    Type: 'AWS::Route53::RecordSetGroup'
+    Properties:
+      RecordSets:
+        - TTL: '60'
+          ResourceRecords:
+            - !GetAtt 
+              - LoadBalancer
+              - DNSName
+          Type: CNAME
+          Name: !Join [ '', [ !Ref LoadBalancerHostName, '.', !Ref EnvironmentName, '.', !Ref DomainDNSName, '.' ]]
+      HostedZoneName: !Join [ '', [ !Ref DomainDNSName, '.' ]]
+
+  WebServerDNSName:
+    Type: 'AWS::Route53::RecordSetGroup'
+    Properties:
+      RecordSets:
+        - TTL: '60'
+          ResourceRecords:
+            - !GetAtt 
+              - EC2Instance
+              - PublicDnsName
+          Type: CNAME
+          Name: !Join [ '', [ !Ref WebServerHostName, '.', !Ref EnvironmentName, '.', !Ref DomainDNSName, '.' ]]
+      HostedZoneName: !Join [ '', [ !Ref DomainDNSName, '.' ]]
+
+  CloudfrontDNSName:
+    Type: 'AWS::Route53::RecordSetGroup'
+    Properties:
+      RecordSets:
+        - TTL: '60'
+          ResourceRecords:
+            - !GetAtt 
+              - CloudfrontDistribution
+              - DomainName
+          Type: CNAME
+          Name: !Join [ '', [ !Ref CloudFrontHostName, '.', !Ref EnvironmentName, '.', !Ref DomainDNSName, '.' ]]
+      HostedZoneName: !Join [ '', [ !Ref DomainDNSName, '.' ]]
+
+  CloudfrontOAI:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: Cloudfront OAI for Assignment 1
+
+  CloudfrontDistribution:
+    Type: 'AWS::CloudFront::Distribution'
+    Properties:
+      DistributionConfig:
+          Aliases:
+            - !Join ['', [ !Ref CloudFrontHostName, '.', !Ref EnvironmentName, '.', !Ref DomainDNSName ]]
+          Origins:
+            - DomainName: !GetAtt [ S3Bucket, DomainName ]
+              Id: myS3Origin
+              S3OriginConfig:
+                OriginAccessIdentity: !Join ['', [ origin-access-identity/cloudfront/, !Ref CloudfrontOAI ]]
+          DefaultCacheBehavior:
+            AllowedMethods:
+              - GET
+              - HEAD
+            TargetOriginId: myS3Origin
+            ForwardedValues:
+              QueryString: 'false'
+              Cookies:
+                Forward: none
+            ViewerProtocolPolicy: allow-all
+            DefaultTTL: 3600
+          Enabled: true
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+Outputs:
+  LoadBalancerURL:
+    Description: Load Balancer URL
+    Value: !Join 
+      - ''
+      - - 'http://'
+        - !Ref LoadBalancerHostName
+        - .
+        - !Ref EnvironmentName
+        - .
+        - !Ref DomainDNSName
+        - /
+  
+  WebServerURL:
+    Description: Web Server URL
+    Value: !Join 
+      - ''
+      - - 'http://'
+        - !Ref WebServerHostName
+        - .
+        - !Ref EnvironmentName
+        - .
+        - !Ref DomainDNSName
+        - /
+
+  S3BucketURL:
+    Description: S3 Bucket URL
+    Value: !GetAtt [ S3Bucket, DomainName ]
+
+  CloudfrontDistributionDnsName:
+    Description: DNS Name of the Cloudfront distribution
+    Value: !GetAtt [ CloudfrontDistribution, DomainName ]
+
+
+
